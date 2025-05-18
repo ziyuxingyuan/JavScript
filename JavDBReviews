@@ -1,25 +1,25 @@
 // ==UserScript==
 // @name            JavDB短评显示
 // @namespace       JavDB短评显示
-// @version         1.5.1
+// @version         2.0
 // @author          ziyuxingyuan
-// @description     JavDB短评完整显示，集成增强样式，客户端分页显示评论，点击翻页自动回顶部，自动重试+高性能签名缓存
+// @description     JavDB短评完整显示
 // @match           https://javdb.com/v/*
 // @icon            https://javdb.com/favicon.ico
 // @require         https://github.com/bolin-dev/JavPack/raw/main/libs/JavPack.Req.lib.js
 // @require         https://github.com/bolin-dev/JavPack/raw/main/libs/JavPack.ReqDB.lib.js
 // @require         https://github.com/bolin-dev/JavPack/raw/main/libs/JavPack.Util.lib.js
-// @connect         jdforrepam.com 
+// @connect         jdforrepam.com
 // @connect         javdb.com
 // @run-at          document-end
-// @grant           GM_xmlhttpRequest
 // @grant           GM_deleteValues
 // @grant           GM_listValues
 // @grant           unsafeWindow
 // @grant           GM_getValue
 // @grant           GM_setValue
-// @require         https://github.com/Tampermonkey/utils/raw/d8a4543a5f828dfa8eefb0a3360859b6fe9c3c34/requires/gh_2215_make_GM_xhr_more_parallel_again.js
 // ==/UserScript==
+
+//部分代码，思路借鉴Jav Pack / Script群组群友IdeaPocket的评论样式修改脚本。
 
 // === 配置区域 ===
 // API域名，如果jdforrepam.com变动，请修改此处
@@ -180,7 +180,7 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
           currentDisplayPage++;
           displayCurrentPageReviews(); // 显示下一页内容
       }
-      // 注意：在这个版本（1.5改），点击下一页不会触发新的API请求，只会内部翻页
+      // 注意：在这个版本（Fetch实现），点击下一页不会触发新的API请求，只会内部翻页
   };
 
   // 显示当前客户端页码的评论
@@ -208,7 +208,7 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
           paginationControls.addEventListener('click', handlePaginationClick);
       }
 
-      console.log(`JavDB短评显示增强版: 显示客户端第 ${currentDisplayPage} 页评论 (${commentsToDisplay.length} 条)，API加载状态: ${isFetchingApi ? '进行中' : '完成'}，共 ${allReviews.length} 条评论。`);
+      console.log(`JavDB短评显示增强版 (Fetch): 显示客户端第 ${currentDisplayPage} 页评论 (${commentsToDisplay.length} 条)，API加载状态: ${isFetchingApi ? '进行中' : '完成'}，共 ${allReviews.length} 条评论。`);
 
       // === 新增：滚动到评论区域顶部 ===
       // 使用 requestAnimationFrame 确保 DOM 更新完成后再滚动，提高平滑度
@@ -226,11 +226,11 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
 
       if (allReviews.length === 0) {
            reviewsNode.innerHTML = renderCont("暂无数据");
-           console.log("JavDB短评显示增强版: API加载完成，无评论数据。");
+           console.log("JavDB短评显示增强版 (Fetch): API加载完成，无评论数据。");
            return;
       }
 
-      console.log(`JavDB短评显示增强版: API加载完成，共获取 ${allReviews.length} 条评论。`);
+      console.log(`JavDB短评显示增强版 (Fetch): API加载完成，共获取 ${allReviews.length} 条评论。`);
       currentDisplayPage = 1; // API加载完毕后，默认显示第一页客户端分页
       displayCurrentPageReviews(); // 显示第一页评论和分页导航
   };
@@ -239,14 +239,15 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
   const processApiPage = (reviews, pageFetched) => {
       if (reviews && reviews.length > 0) {
           allReviews = allReviews.concat(reviews); // 合并当前页评论到总列表
-          currentApiPage++; // 准备加载下一页API数据
+          currentApiPage = pageFetched; // 更新已成功获取的最高API页码
           retryCount = 0; // 当前API页成功，重置下一页的重试计数
 
           // 更新加载提示，显示已加载数量和当前API页码
           reviewsNode.innerHTML = renderCont(`正在加载短评... 已加载 ${allReviews.length} 条 (API页 ${pageFetched})`);
 
           // 继续加载下一页API数据
-          fetchReviews(currentApiPage);
+          // 使用 setTimeout 确保不会因为递归调用过深导致栈溢出，并给浏览器一些喘息时间
+          setTimeout(() => fetchReviews(currentApiPage + 1), 50); // 增加一个小的延迟
       } else {
           // 当前API页没有返回评论，说明已经加载完毕所有API数据
           finishFetchingApi(); // 完成API加载，显示客户端分页
@@ -255,7 +256,7 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
 
   // 错误处理和重试 (现在针对单页API请求)
   const handleError = (msg, error, pageWithError) => {
-    console.error(`JavDB短评显示增强版错误 (API页 ${pageWithError}): ${msg}`, error);
+    console.error(`JavDB短评显示增强版 (Fetch) 错误 (API页 ${pageWithError}): ${msg}`, error);
 
     // 如果是签名获取失败，停止整个流程
     if (msg.includes("签名获取失败")) {
@@ -307,13 +308,13 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
   };
 
 
-  // 获取评论数据 (现在接受页码参数，用于API请求)
-  const fetchReviews = (pageToFetch) => {
+  // 获取评论数据 (使用 fetch API)
+  const fetchReviews = async (pageToFetch) => {
     // 请求间隔限制
     const now = Date.now();
     if (now - lastRequestTime < 300) {
-      setTimeout(() => fetchReviews(pageToFetch), 300 - (now - lastRequestTime));
-      return;
+      // 使用 Promise 和 setTimeout 实现延迟
+      await new Promise(resolve => setTimeout(resolve, 300 - (now - lastRequestTime)));
     }
     lastRequestTime = now;
 
@@ -332,36 +333,50 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
 
     const signature = getOptimizedSignature();
     if (!signature) {
+         // 签名获取失败，直接处理错误并返回
          handleError("签名获取失败", null, pageToFetch);
          return;
     }
 
-    GM_xmlhttpRequest({
-      url: `${apiUrl}?${new URLSearchParams(params).toString()}`,
-      method: "GET",
-      headers: { "jdSignature": signature },
-      timeout: 8000,
-      onload: function(response) {
-        if (response.status === 200) {
-          try {
-            const data = JSON.parse(response.responseText);
-            // 处理当前页API数据，并决定是否加载下一页API数据
-            processApiPage(data?.data?.reviews ?? [], pageToFetch);
-          } catch (e) {
-            handleError("数据解析失败", e, pageToFetch);
-          }
-        } else {
-          handleError(`API请求失败: HTTP ${response.status}`, null, pageToFetch);
+    const requestUrl = `${apiUrl}?${new URLSearchParams(params).toString()}`;
+
+    try {
+        // 使用 AbortController 实现超时控制 (更现代的方式)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
+
+        const response = await fetch(requestUrl, {
+            method: "GET",
+            headers: { "jdSignature": signature },
+            signal: controller.signal // 关联 AbortController 的 signal
+        });
+
+        clearTimeout(timeoutId); // 请求成功或失败，清除超时定时器
+
+        // 检查 HTTP 状态码
+        if (!response.ok) {
+            // HTTP 状态码非 2xx，视为错误
+            throw new Error(`API请求失败: HTTP ${response.status} ${response.statusText}`);
         }
-      },
-      onerror: function(error) {
-        handleError("网络请求错误", error, pageToFetch);
-      },
-      ontimeout: function() {
-        handleError("请求超时", null, pageToFetch);
-      }
-    });
-  };
+
+        // 解析 JSON
+        const data = await response.json();
+
+        // 检查 API 返回的数据结构
+        const reviews = data?.data?.reviews ?? [];
+
+        // 处理当前页API数据，并决定是否继续加载下一页API
+        processApiPage(reviews, pageToFetch);
+
+    } catch (error) {
+        // 捕获网络错误、JSON 解析错误、HTTP 状态码错误、超时错误 (AbortError) 等
+        if (error.name === 'AbortError') {
+             handleError("请求超时", null, pageToFetch);
+        } else {
+             handleError(error.message || "未知错误", error, pageToFetch);
+        }
+    }
+};
 
 
   // 显示评论区域并触发加载
@@ -372,13 +387,13 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
 
     // 如果正在进行API加载，则直接返回，避免重复触发
     if (isFetchingApi) {
-        console.log("JavDB短评显示增强版: 正在进行API加载，跳过重复触发。");
+        console.log("JavDB短评显示增强版 (Fetch): 正在进行API加载，跳过重复触发。");
         return;
     }
 
     // 如果已经加载过任何评论数据，直接显示当前客户端页
     if (allReviews.length > 0) {
-        console.log(`JavDB短评显示增强版: 已加载 ${allReviews.length} 条评论，直接显示客户端第 ${currentDisplayPage} 页。`);
+        console.log(`JavDB短评显示增强版 (Fetch): 已加载 ${allReviews.length} 条评论，直接显示客户端第 ${currentDisplayPage} 页。`);
         displayCurrentPageReviews();
         return;
     }
@@ -394,7 +409,7 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
     loadNode.style.display = "block"; // 显示主加载提示
     reviewsNode.innerHTML = renderCont(`正在加载短评...`); // 初始加载提示
 
-    console.log("JavDB短评显示增强版: 开始API分页加载短评...");
+    console.log("JavDB短评显示增强版 (Fetch): 开始API分页加载短评 (使用 fetch)...");
     // 从第一页API开始加载 (API页码从1开始)
     fetchReviews(currentApiPage);
   };
@@ -420,7 +435,7 @@ Util.upStore(); // 确保 JavPack 库的存储机制正常工作
   if (tabsNode) {
       tabsNode.addEventListener("click", onclick, true);
   } else {
-      console.error("JavDB短评显示增强版: 未找到tabs容器");
+      console.error("JavDB短评显示增强版 (Fetch): 未找到tabs容器");
   }
 
 })();
